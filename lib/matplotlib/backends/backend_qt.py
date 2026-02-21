@@ -682,6 +682,46 @@ class FigureManagerQT(FigureManagerBase):
     def set_window_title(self, title):
         self.window.setWindowTitle(title)
 
+    def get_window_frame(self):
+        """
+        Return the window frame geometry as ``(x, y, width, height)``.
+
+        Coordinates are in Qt screen space: origin at the top-left of the
+        primary screen, y increasing downward, units in logical pixels.
+        Width and height include window decorations (title bar, borders).
+        """
+        fg = self.window.frameGeometry()
+        return fg.x(), fg.y(), fg.width(), fg.height()
+
+    def set_window_frame(self, x, y, w, h):
+        """
+        Set the window frame geometry.
+
+        Parameters
+        ----------
+        x, y : int
+            Position of the top-left corner of the window frame (including
+            decorations) in Qt screen coordinates (origin at the top-left of
+            the primary screen, y increasing downward), in logical pixels.
+        w, h : int
+            Width and height of the window frame including decorations,
+            in logical pixels.
+        """
+        # QWidget.setGeometry operates on the inner (content) rect.
+        # Compute the frame margins so we can derive the inner rect from the
+        # desired outer rect.  The margins are only non-zero after the window
+        # has been shown; before that they are zero, which means setGeometry
+        # is called with the requested values directly — acceptable for the
+        # common use case of positioning the window before plt.show().
+        fg = self.window.frameGeometry()
+        g = self.window.geometry()
+        dx = g.x() - fg.x()          # left decoration width
+        dy = g.y() - fg.y()          # top decoration height (title bar)
+        dw = fg.width() - g.width()   # total horizontal decoration
+        dh = fg.height() - g.height() # total vertical decoration
+        self.window.setGeometry(int(x) + dx, int(y) + dy,
+                                int(w) - dw, int(h) - dh)
+
 
 class _IconEngine(QtGui.QIconEngine):
     """
