@@ -86,6 +86,11 @@ cursord = {
     ]
 }
 
+# WindowStaysOnTopHint lives under Qt.WindowType in Qt6, Qt namespace in Qt5.
+_STAYS_ON_TOP = getattr(
+    QtCore.Qt.WindowType, 'WindowStaysOnTopHint',
+    QtCore.Qt.WindowStaysOnTopHint)
+
 
 # lru_cache keeps a reference to the QApplication instance, keeping it from
 # being GC'd.
@@ -721,6 +726,87 @@ class FigureManagerQT(FigureManagerBase):
         dh = fg.height() - g.height() # total vertical decoration
         self.window.setGeometry(int(x) + dx, int(y) + dy,
                                 int(w) - dw, int(h) - dh)
+
+    def get_screen_frame(self):
+        """
+        Return the geometry of the screen the window currently lives on.
+
+        Returns ``(x, y, width, height)`` in Qt screen coordinates (origin at
+        the top-left of the primary screen, y increasing downward, logical
+        pixels).  Corresponds to the full screen area (including menu bar /
+        taskbar), matching ``NSScreen.frame`` on macOS.
+
+        Raises ``RuntimeError`` if the window has not yet been shown (the
+        underlying window handle is not available before the first show).
+        """
+        window_handle = self.window.windowHandle()
+        if not window_handle:
+            raise RuntimeError("Window is not associated with any screen")
+        screen = window_handle.screen()
+        if not screen:
+            raise RuntimeError("Window is not associated with any screen")
+        geom = screen.geometry()
+        return geom.x(), geom.y(), geom.width(), geom.height()
+
+    def get_window_screen_id(self):
+        """
+        Return an integer index identifying the screen the window is on.
+
+        The index is the position of the current screen in
+        ``QApplication.screens()``.  It is analogous to ``CGDirectDisplayID``
+        on macOS but is not a stable hardware identifier — the value may change
+        when monitors are added or removed.
+
+        Raises ``RuntimeError`` if the window has not yet been shown.
+        """
+        window_handle = self.window.windowHandle()
+        if not window_handle:
+            raise RuntimeError("Window is not associated with any screen")
+        screen = window_handle.screen()
+        if not screen:
+            raise RuntimeError("Window is not associated with any screen")
+        screens = QtWidgets.QApplication.screens()
+        try:
+            return screens.index(screen)
+        except ValueError:
+            raise RuntimeError("Window is not associated with any screen")
+
+    def set_window_level(self, floating):
+        """
+        Set whether the window floats above all other windows.
+
+        Parameters
+        ----------
+        floating : bool
+            If True, the window will stay on top of all other windows
+            (``WindowStaysOnTopHint``).  If False, it reverts to normal level.
+
+        Notes
+        -----
+        Qt requires a hide/show cycle to apply window-flag changes; this method
+        re-shows the window if it was visible.  Geometry is preserved across
+        the cycle.
+        """
+        flags = self.window.windowFlags()
+        if floating:
+            flags |= _STAYS_ON_TOP
+        else:
+            flags &= ~_STAYS_ON_TOP
+        was_visible = self.window.isVisible()
+        self.window.setWindowFlags(flags)
+        if was_visible:
+            self.window.show()
+
+    def get_window_level(self):
+        """
+        Return whether the window is set to float above all other windows.
+
+        Returns
+        -------
+        bool
+            True if ``WindowStaysOnTopHint`` is set, False otherwise.
+        """
+        return bool(self.window.windowFlags() & _STAYS_ON_TOP)
 
 
 class _IconEngine(QtGui.QIconEngine):
