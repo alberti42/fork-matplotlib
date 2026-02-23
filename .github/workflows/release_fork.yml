@@ -22,6 +22,7 @@ on:
           - macos-arm64
           - macos-intel
           - linux-x86_64
+          - linux-arm64
 
 permissions:
   contents: write   # needed to create GitHub Releases
@@ -41,18 +42,21 @@ jobs:
         run: |
           MACOS_ARM='{"name":"macOS arm64","os":"macos-14","cibw_archs":"arm64","cibw_extra":"MACOSX_DEPLOYMENT_TARGET=11.0"}'
           MACOS_INTEL='{"name":"macOS Intel","os":"macos-15-intel","cibw_archs":"x86_64","cibw_extra":"MACOSX_DEPLOYMENT_TARGET=10.12"}'
-          LINUX='{"name":"Linux x86_64","os":"ubuntu-latest","cibw_archs":"x86_64","cibw_extra":""}'
+          LINUX_X86='{"name":"Linux x86_64","os":"ubuntu-latest","cibw_archs":"x86_64","cibw_extra":""}'
+          LINUX_ARM='{"name":"Linux arm64","os":"ubuntu-24.04-arm","cibw_archs":"aarch64","cibw_extra":""}'
 
           PLATFORM="${{ inputs.platforms }}"
           # Tag pushes always build everything.
           if [[ "${{ github.event_name }}" == "push" || "$PLATFORM" == "all" ]]; then
-            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX]"
+            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX_X86,$LINUX_ARM]"
           elif [[ "$PLATFORM" == "macos-arm64" ]]; then
             ENTRIES="[$MACOS_ARM]"
           elif [[ "$PLATFORM" == "macos-intel" ]]; then
             ENTRIES="[$MACOS_INTEL]"
+          elif [[ "$PLATFORM" == "linux-arm64" ]]; then
+            ENTRIES="[$LINUX_ARM]"
           else
-            ENTRIES="[$LINUX]"
+            ENTRIES="[$LINUX_X86]"
           fi
           echo "matrix={\"include\":$ENTRIES}" >> $GITHUB_OUTPUT
 
