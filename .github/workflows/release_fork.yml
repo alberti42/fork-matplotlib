@@ -5,17 +5,61 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual trigger: choose version string and which platform(s) to build.
+  # Useful for testing the pipeline without pushing a real release tag.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (PEP 440, no leading v — e.g. 3.10.1.post2)'
+        required: true
+        type: string
+      platforms:
+        description: 'Platforms to build'
+        type: choice
+        default: all
+        options:
+          - all
+          - macos-arm64
+          - linux-x86_64
 
 permissions:
   contents: write   # needed to create GitHub Releases
 
 jobs:
+  # ── 0. Compute build matrix ────────────────────────────────────────────────
+  # Outputs a JSON matrix so that tag-push builds all platforms while a manual
+  # dispatch can target a single one.
+  setup:
+    name: Compute matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Select platforms
+        id: matrix
+        run: |
+          MACOS='{"name":"macOS arm64","os":"macos-14","cibw_archs":"arm64","cibw_extra":"MACOSX_DEPLOYMENT_TARGET=11.0"}'
+          LINUX='{"name":"Linux x86_64","os":"ubuntu-latest","cibw_archs":"x86_64","cibw_extra":""}'
+
+          PLATFORM="${{ inputs.platforms }}"
+          # Tag pushes always build everything.
+          if [[ "${{ github.event_name }}" == "push" || "$PLATFORM" == "all" ]]; then
+            ENTRIES="[$MACOS,$LINUX]"
+          elif [[ "$PLATFORM" == "macos-arm64" ]]; then
+            ENTRIES="[$MACOS]"
+          else
+            ENTRIES="[$LINUX]"
+          fi
+          echo "matrix={\"include\":$ENTRIES}" >> $GITHUB_OUTPUT
+
   # ── 1. Build the source distribution ──────────────────────────────────────
   build_sdist:
     name: Build sdist
+    needs: setup
     runs-on: ubuntu-latest
     outputs:
       SDIST_NAME: ${{ steps.sdist.outputs.SDIST_NAME }}
+      VERSION:    ${{ steps.version.outputs.VERSION }}
 
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +70,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Tell setuptools_scm to use the tag name directly, bypassing git tag
-      # inspection. This avoids failures when upstream version tags are not
-      # reachable in the fork's history. Strip the leading 'v' (e.g.
-      # v3.10.1.post1 → 3.10.1.post1). Tag names must be PEP 440 compliant
-      # (e.g. v3.10.1.post1, v3.10.2rc1) – hyphens are NOT allowed.
-      - name: Set version from tag
-        run: echo "SETUPTOOLS_SCM_PRETEND_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+      # Derive version from the tag (push) or from the manual input (dispatch).
+      # Exported both as an env var (for the sdist build below) and as a job
+      # output (forwarded to build_wheels via needs context).
+      - name: Set version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION=$V" >> $GITHUB_ENV
+          echo "VERSION=$V" >> $GITHUB_OUTPUT
 
       # LICENSE_QHULL is downloaded at build time and must exist before the
       # sdist is packaged so that it ends up inside the wheel later.
@@ -59,19 +109,10 @@ jobs:
   # ── 2. Build wheels ────────────────────────────────────────────────────────
   build_wheels:
     name: Build wheels – ${{ matrix.name }}
-    needs: build_sdist
+    needs: [setup, build_sdist]
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        include:
-          - name: macOS arm64
-            os: macos-14
-            cibw_archs: arm64
-            cibw_extra_env: "MACOSX_DEPLOYMENT_TARGET=11.0"
-          - name: Linux x86_64
-            os: ubuntu-latest
-            cibw_archs: x86_64
-            cibw_extra_env: ""
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Download sdist
@@ -89,8 +130,8 @@ jobs:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           # Propagate the version into the inner build environment.
           CIBW_ENVIRONMENT: >-
-            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.SETUPTOOLS_SCM_PRETEND_VERSION }}
-            ${{ matrix.cibw_extra_env }}
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ needs.build_sdist.outputs.VERSION }}
+            ${{ matrix.cibw_extra }}
           # Remove stale build artefacts before each wheel build.
           CIBW_BEFORE_BUILD: rm -rf {package}/build
           # Skip post-install tests – some may fail on a fork build.
