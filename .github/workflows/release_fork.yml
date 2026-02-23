@@ -1,0 +1,108 @@
+---
+name: Build and publish pre-release wheels (fork)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed to create GitHub Releases
+
+jobs:
+  # ── 1. Build the source distribution ──────────────────────────────────────
+  build_sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    outputs:
+      SDIST_NAME: ${{ steps.sdist.outputs.SDIST_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Tell setuptools_scm to use the tag name directly, bypassing git tag
+      # inspection. This avoids failures when upstream version tags are not
+      # reachable in the fork's history. Strip the leading 'v' (e.g.
+      # v3.10.1.post1 → 3.10.1.post1). Tag names must be PEP 440 compliant
+      # (e.g. v3.10.1.post1, v3.10.2rc1) – hyphens are NOT allowed.
+      - name: Set version from tag
+        run: echo "SETUPTOOLS_SCM_PRETEND_VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      # LICENSE_QHULL is downloaded at build time and must exist before the
+      # sdist is packaged so that it ends up inside the wheel later.
+      - name: Pre-download bundled licenses
+        run: >
+          curl -Lo LICENSE/LICENSE_QHULL
+          https://github.com/qhull/qhull/raw/2020.2/COPYING.txt
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build sdist
+        id: sdist
+        run: |
+          python -m build --sdist
+          python ci/export_sdist_name.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ── 2. Build wheels ────────────────────────────────────────────────────────
+  build_wheels:
+    name: Build wheels – macOS arm64
+    needs: build_sdist
+    runs-on: macos-14          # GitHub-hosted Apple Silicon runner
+
+    steps:
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+      - name: Build wheels (CPython 3.11 – 3.13)
+        uses: pypa/cibuildwheel@v3.3.1
+        with:
+          package-dir: dist/${{ needs.build_sdist.outputs.SDIST_NAME }}
+        env:
+          CIBW_BUILD: "cp311-* cp312-* cp313-*"
+          CIBW_ARCHS: arm64
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          # Remove stale build artefacts before each wheel build.
+          CIBW_BEFORE_BUILD: rm -rf {package}/build
+          # Skip post-install tests – some may fail on a fork build.
+          CIBW_TEST_SKIP: "*"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-arm64
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  # ── 3. Publish to GitHub Releases ─────────────────────────────────────────
+  publish:
+    name: Create pre-release
+    needs: build_wheels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-macos-arm64
+          path: dist/
+
+      - name: Create GitHub pre-release and attach wheels
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          files: dist/*.whl
