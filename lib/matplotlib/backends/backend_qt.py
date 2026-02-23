@@ -566,10 +566,20 @@ class FigureCanvasQT(FigureCanvasBase, QtWidgets.QWidget):
 
 class MainWindow(QtWidgets.QMainWindow):
     closing = QtCore.Signal()
+    window_resize_happened = QtCore.Signal()
+    window_move_happened = QtCore.Signal()
 
     def closeEvent(self, event):
         self.closing.emit()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.window_resize_happened.emit()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self.window_move_happened.emit()
 
 
 class FigureManagerQT(FigureManagerBase):
@@ -590,6 +600,24 @@ class FigureManagerQT(FigureManagerBase):
         self.window = MainWindow()
         super().__init__(canvas, num)
         self.window.closing.connect(self._widgetclosed)
+
+        # Window-management event callbacks (see mpl_connect / mpl_disconnect below).
+        self._window_event_callbacks = cbook.CallbackRegistry()
+
+        # Single-shot debounce timers: restarted on every resize/move; fire the
+        # "end" event once the window has been still for 200 ms.
+        self._resize_end_timer = QtCore.QTimer(self.window)
+        self._resize_end_timer.setSingleShot(True)
+        self._resize_end_timer.setInterval(200)
+        self._resize_end_timer.timeout.connect(self._window_resize_end_event)
+
+        self._move_end_timer = QtCore.QTimer(self.window)
+        self._move_end_timer.setSingleShot(True)
+        self._move_end_timer.setInterval(200)
+        self._move_end_timer.timeout.connect(self._window_move_end_event)
+
+        self.window.window_resize_happened.connect(self._resize_end_timer.start)
+        self.window.window_move_happened.connect(self._move_end_timer.start)
 
         if sys.platform != "darwin":
             image = str(cbook._get_data_path('images/matplotlib.svg'))
@@ -807,6 +835,37 @@ class FigureManagerQT(FigureManagerBase):
             True if ``WindowStaysOnTopHint`` is set, False otherwise.
         """
         return bool(self.window.windowFlags() & _STAYS_ON_TOP)
+
+    def mpl_connect(self, event_name, callback):
+        """
+        Register *callback* to be called on a window-management event.
+
+        Parameters
+        ----------
+        event_name : str
+            One of:
+
+            - ``'window_resize_end_event'``: called with no arguments;
+              fires ~200 ms after the user finishes resizing the window.
+            - ``'window_move_end_event'``: called with no arguments;
+              fires ~200 ms after the user finishes moving the window.
+
+        Returns
+        -------
+        int
+            A callback id that can be passed to `mpl_disconnect`.
+        """
+        return self._window_event_callbacks.connect(event_name, callback)
+
+    def mpl_disconnect(self, cid):
+        """Remove a callback previously registered with `mpl_connect`."""
+        self._window_event_callbacks.disconnect(cid)
+
+    def _window_resize_end_event(self):
+        self._window_event_callbacks.process('window_resize_end_event')
+
+    def _window_move_end_event(self):
+        self._window_event_callbacks.process('window_move_end_event')
 
 
 class _IconEngine(QtGui.QIconEngine):
