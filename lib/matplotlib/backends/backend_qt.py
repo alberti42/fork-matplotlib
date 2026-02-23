@@ -86,6 +86,11 @@ cursord = {
     ]
 }
 
+# WindowStaysOnTopHint lives under Qt.WindowType in Qt6, Qt namespace in Qt5.
+_STAYS_ON_TOP = getattr(
+    QtCore.Qt.WindowType, 'WindowStaysOnTopHint',
+    QtCore.Qt.WindowStaysOnTopHint)
+
 
 # lru_cache keeps a reference to the QApplication instance, keeping it from
 # being GC'd.
@@ -561,10 +566,20 @@ class FigureCanvasQT(FigureCanvasBase, QtWidgets.QWidget):
 
 class MainWindow(QtWidgets.QMainWindow):
     closing = QtCore.Signal()
+    window_resize_happened = QtCore.Signal()
+    window_move_happened = QtCore.Signal()
 
     def closeEvent(self, event):
         self.closing.emit()
         super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.window_resize_happened.emit()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self.window_move_happened.emit()
 
 
 class FigureManagerQT(FigureManagerBase):
@@ -585,6 +600,24 @@ class FigureManagerQT(FigureManagerBase):
         self.window = MainWindow()
         super().__init__(canvas, num)
         self.window.closing.connect(self._widgetclosed)
+
+        # Window-management event callbacks (see mpl_connect / mpl_disconnect below).
+        self._window_event_callbacks = cbook.CallbackRegistry()
+
+        # Single-shot debounce timers: restarted on every resize/move; fire the
+        # "end" event once the window has been still for 200 ms.
+        self._resize_end_timer = QtCore.QTimer(self.window)
+        self._resize_end_timer.setSingleShot(True)
+        self._resize_end_timer.setInterval(200)
+        self._resize_end_timer.timeout.connect(self._window_resize_end_event)
+
+        self._move_end_timer = QtCore.QTimer(self.window)
+        self._move_end_timer.setSingleShot(True)
+        self._move_end_timer.setInterval(200)
+        self._move_end_timer.timeout.connect(self._window_move_end_event)
+
+        self.window.window_resize_happened.connect(self._resize_end_timer.start)
+        self.window.window_move_happened.connect(self._move_end_timer.start)
 
         if sys.platform != "darwin":
             image = str(cbook._get_data_path('images/matplotlib.svg'))
@@ -685,6 +718,158 @@ class FigureManagerQT(FigureManagerBase):
 
     def set_window_title(self, title):
         self.window.setWindowTitle(title)
+
+    def get_window_frame(self):
+        """
+        Return the window frame geometry as ``(x, y, width, height)``.
+
+        Coordinates are in Qt screen space: origin at the top-left of the
+        primary screen, y increasing downward, units in logical pixels.
+        Width and height include window decorations (title bar, borders).
+        """
+        fg = self.window.frameGeometry()
+        return fg.x(), fg.y(), fg.width(), fg.height()
+
+    def set_window_frame(self, x, y, w, h):
+        """
+        Set the window frame geometry.
+
+        Parameters
+        ----------
+        x, y : int
+            Position of the top-left corner of the window frame (including
+            decorations) in Qt screen coordinates (origin at the top-left of
+            the primary screen, y increasing downward), in logical pixels.
+        w, h : int
+            Width and height of the window frame including decorations,
+            in logical pixels.
+        """
+        # QWidget.setGeometry operates on the inner (content) rect.
+        # Compute the frame margins so we can derive the inner rect from the
+        # desired outer rect.  The margins are only non-zero after the window
+        # has been shown; before that they are zero, which means setGeometry
+        # is called with the requested values directly — acceptable for the
+        # common use case of positioning the window before plt.show().
+        fg = self.window.frameGeometry()
+        g = self.window.geometry()
+        dx = g.x() - fg.x()          # left decoration width
+        dy = g.y() - fg.y()          # top decoration height (title bar)
+        dw = fg.width() - g.width()   # total horizontal decoration
+        dh = fg.height() - g.height() # total vertical decoration
+        self.window.setGeometry(int(x) + dx, int(y) + dy,
+                                int(w) - dw, int(h) - dh)
+
+    def get_screen_frame(self):
+        """
+        Return the geometry of the screen the window currently lives on.
+
+        Returns ``(x, y, width, height)`` in Qt screen coordinates (origin at
+        the top-left of the primary screen, y increasing downward, logical
+        pixels).  Corresponds to the full screen area (including menu bar /
+        taskbar), matching ``NSScreen.frame`` on macOS.
+
+        Raises ``RuntimeError`` if the window has not yet been shown (the
+        underlying window handle is not available before the first show).
+        """
+        window_handle = self.window.windowHandle()
+        if not window_handle:
+            raise RuntimeError("Window is not associated with any screen")
+        screen = window_handle.screen()
+        if not screen:
+            raise RuntimeError("Window is not associated with any screen")
+        geom = screen.geometry()
+        return geom.x(), geom.y(), geom.width(), geom.height()
+
+    def get_window_screen_id(self):
+        """
+        Return an integer index identifying the screen the window is on.
+
+        The index is the position of the current screen in
+        ``QApplication.screens()``.  It is analogous to ``CGDirectDisplayID``
+        on macOS but is not a stable hardware identifier — the value may change
+        when monitors are added or removed.
+
+        Raises ``RuntimeError`` if the window has not yet been shown.
+        """
+        window_handle = self.window.windowHandle()
+        if not window_handle:
+            raise RuntimeError("Window is not associated with any screen")
+        screen = window_handle.screen()
+        if not screen:
+            raise RuntimeError("Window is not associated with any screen")
+        screens = QtWidgets.QApplication.screens()
+        try:
+            return screens.index(screen)
+        except ValueError:
+            raise RuntimeError("Window is not associated with any screen")
+
+    def set_window_level(self, floating):
+        """
+        Set whether the window floats above all other windows.
+
+        Parameters
+        ----------
+        floating : bool
+            If True, the window will stay on top of all other windows
+            (``WindowStaysOnTopHint``).  If False, it reverts to normal level.
+
+        Notes
+        -----
+        Qt requires a hide/show cycle to apply window-flag changes; this method
+        re-shows the window if it was visible.  Geometry is preserved across
+        the cycle.
+        """
+        flags = self.window.windowFlags()
+        if floating:
+            flags |= _STAYS_ON_TOP
+        else:
+            flags &= ~_STAYS_ON_TOP
+        was_visible = self.window.isVisible()
+        self.window.setWindowFlags(flags)
+        if was_visible:
+            self.window.show()
+
+    def get_window_level(self):
+        """
+        Return whether the window is set to float above all other windows.
+
+        Returns
+        -------
+        bool
+            True if ``WindowStaysOnTopHint`` is set, False otherwise.
+        """
+        return bool(self.window.windowFlags() & _STAYS_ON_TOP)
+
+    def mpl_connect(self, event_name, callback):
+        """
+        Register *callback* to be called on a window-management event.
+
+        Parameters
+        ----------
+        event_name : str
+            One of:
+
+            - ``'window_resize_end_event'``: called with no arguments;
+              fires ~200 ms after the user finishes resizing the window.
+            - ``'window_move_end_event'``: called with no arguments;
+              fires ~200 ms after the user finishes moving the window.
+
+        Returns
+        -------
+        int
+            A callback id that can be passed to `mpl_disconnect`.
+        """
+        return self._window_event_callbacks.connect(event_name, callback)
+
+    def mpl_disconnect(self, cid):
+        """Remove a callback previously registered with `mpl_connect`."""
+        self._window_event_callbacks.disconnect(cid)
+
+    def _window_resize_end_event(self):
+        self._window_event_callbacks.process('window_resize_end_event')
+
+    def _window_move_end_event(self):
+        self._window_event_callbacks.process('window_move_end_event')
 
 
 class _IconEngine(QtGui.QIconEngine):
