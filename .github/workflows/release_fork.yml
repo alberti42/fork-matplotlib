@@ -24,6 +24,7 @@ on:
           - linux-x86_64
           - linux-arm64
           - windows-x86_64
+          - windows-arm64
 
 permissions:
   contents: write   # needed to create GitHub Releases
@@ -46,11 +47,12 @@ jobs:
           LINUX_X86='{"name":"Linux x86_64","os":"ubuntu-latest","cibw_archs":"x86_64","cibw_extra":""}'
           LINUX_ARM='{"name":"Linux arm64","os":"ubuntu-24.04-arm","cibw_archs":"aarch64","cibw_extra":""}'
           WIN_X86='{"name":"Windows x86_64","os":"windows-latest","cibw_archs":"AMD64","cibw_extra":""}'
+          WIN_ARM='{"name":"Windows arm64","os":"windows-11-arm","cibw_archs":"ARM64","cibw_extra":""}'
 
           PLATFORM="${{ inputs.platforms }}"
           # Tag pushes always build everything.
           if [[ "${{ github.event_name }}" == "push" || "$PLATFORM" == "all" ]]; then
-            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX_X86,$LINUX_ARM,$WIN_X86]"
+            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX_X86,$LINUX_ARM,$WIN_X86,$WIN_ARM]"
           elif [[ "$PLATFORM" == "macos-arm64" ]]; then
             ENTRIES="[$MACOS_ARM]"
           elif [[ "$PLATFORM" == "macos-intel" ]]; then
@@ -59,6 +61,8 @@ jobs:
             ENTRIES="[$LINUX_ARM]"
           elif [[ "$PLATFORM" == "windows-x86_64" ]]; then
             ENTRIES="[$WIN_X86]"
+          elif [[ "$PLATFORM" == "windows-arm64" ]]; then
+            ENTRIES="[$WIN_ARM]"
           else
             ENTRIES="[$LINUX_X86]"
           fi
