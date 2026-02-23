@@ -150,6 +150,14 @@ jobs:
             ${{ matrix.cibw_extra }}
           # Remove stale build artefacts before each wheel build.
           CIBW_BEFORE_BUILD: rm -rf {package}/build
+          # On Windows, force MSVC (via --vsenv) so meson does not pick up MinGW
+          # from PATH, which cannot link ARM64 PE DLLs. Also link the CRT
+          # statically while keeping VCRUNTIME140.dll and the UCRT shared,
+          # matching the upstream matplotlib wheel configuration.
+          CIBW_CONFIG_SETTINGS_WINDOWS: >-
+            setup-args="--vsenv"
+            setup-args="-Db_vscrt=mt"
+            setup-args="-Dcpp_link_args=['ucrt.lib','vcruntime.lib','/nodefaultlib:libucrt.lib','/nodefaultlib:libvcruntime.lib']"
           # On Windows, install delvewheel and bundle required DLLs into the wheel.
           CIBW_BEFORE_BUILD_WINDOWS: pip install delvewheel && rm -rf {package}/build
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: delvewheel repair -w {dest_dir} {wheel}
