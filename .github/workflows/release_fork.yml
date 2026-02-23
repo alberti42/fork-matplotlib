@@ -23,6 +23,7 @@ on:
           - macos-intel
           - linux-x86_64
           - linux-arm64
+          - windows-x86_64
 
 permissions:
   contents: write   # needed to create GitHub Releases
@@ -44,17 +45,20 @@ jobs:
           MACOS_INTEL='{"name":"macOS Intel","os":"macos-15-intel","cibw_archs":"x86_64","cibw_extra":"MACOSX_DEPLOYMENT_TARGET=10.12"}'
           LINUX_X86='{"name":"Linux x86_64","os":"ubuntu-latest","cibw_archs":"x86_64","cibw_extra":""}'
           LINUX_ARM='{"name":"Linux arm64","os":"ubuntu-24.04-arm","cibw_archs":"aarch64","cibw_extra":""}'
+          WIN_X86='{"name":"Windows x86_64","os":"windows-latest","cibw_archs":"AMD64","cibw_extra":""}'
 
           PLATFORM="${{ inputs.platforms }}"
           # Tag pushes always build everything.
           if [[ "${{ github.event_name }}" == "push" || "$PLATFORM" == "all" ]]; then
-            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX_X86,$LINUX_ARM]"
+            ENTRIES="[$MACOS_ARM,$MACOS_INTEL,$LINUX_X86,$LINUX_ARM,$WIN_X86]"
           elif [[ "$PLATFORM" == "macos-arm64" ]]; then
             ENTRIES="[$MACOS_ARM]"
           elif [[ "$PLATFORM" == "macos-intel" ]]; then
             ENTRIES="[$MACOS_INTEL]"
           elif [[ "$PLATFORM" == "linux-arm64" ]]; then
             ENTRIES="[$LINUX_ARM]"
+          elif [[ "$PLATFORM" == "windows-x86_64" ]]; then
+            ENTRIES="[$WIN_X86]"
           else
             ENTRIES="[$LINUX_X86]"
           fi
@@ -142,6 +146,9 @@ jobs:
             ${{ matrix.cibw_extra }}
           # Remove stale build artefacts before each wheel build.
           CIBW_BEFORE_BUILD: rm -rf {package}/build
+          # On Windows, install delvewheel and bundle required DLLs into the wheel.
+          CIBW_BEFORE_BUILD_WINDOWS: pip install delvewheel && rm -rf {package}/build
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: delvewheel repair -w {dest_dir} {wheel}
           # Skip post-install tests – some may fail on a fork build.
           CIBW_TEST_SKIP: "*"
 
