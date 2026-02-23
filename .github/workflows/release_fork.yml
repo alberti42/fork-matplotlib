@@ -58,9 +58,20 @@ jobs:
 
   # ── 2. Build wheels ────────────────────────────────────────────────────────
   build_wheels:
-    name: Build wheels – macOS arm64
+    name: Build wheels – ${{ matrix.name }}
     needs: build_sdist
-    runs-on: macos-14          # GitHub-hosted Apple Silicon runner
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            cibw_archs: arm64
+            cibw_extra_env: "MACOSX_DEPLOYMENT_TARGET=11.0"
+          - name: Linux x86_64
+            os: ubuntu-latest
+            cibw_archs: x86_64
+            cibw_extra_env: ""
 
     steps:
       - name: Download sdist
@@ -75,8 +86,11 @@ jobs:
           package-dir: dist/${{ needs.build_sdist.outputs.SDIST_NAME }}
         env:
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
-          CIBW_ARCHS: arm64
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+          # Propagate the version into the inner build environment.
+          CIBW_ENVIRONMENT: >-
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.SETUPTOOLS_SCM_PRETEND_VERSION }}
+            ${{ matrix.cibw_extra_env }}
           # Remove stale build artefacts before each wheel build.
           CIBW_BEFORE_BUILD: rm -rf {package}/build
           # Skip post-install tests – some may fail on a fork build.
@@ -84,7 +98,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-arm64
+          name: wheels-${{ matrix.cibw_archs }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
@@ -95,10 +109,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download wheels
+      - name: Download all wheels
         uses: actions/download-artifact@v4
         with:
-          name: wheels-macos-arm64
+          pattern: wheels-*
+          merge-multiple: true
           path: dist/
 
       - name: Create GitHub pre-release and attach wheels
