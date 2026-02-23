@@ -159,9 +159,12 @@ jobs:
           if-no-files-found: error
 
   # ── 3. Publish to GitHub Releases ─────────────────────────────────────────
+  # Skipped on manual dispatches (no tag → no release); wheels are still
+  # available as workflow artefacts for inspection.
   publish:
     name: Create pre-release
     needs: build_wheels
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
