@@ -166,7 +166,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.cibw_archs }}
+          name: wheels-${{ matrix.name }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
